@@ -1,3 +1,19 @@
+"""Local BETSE grounding of the TAS effort metric G.
+
+Builds minimal BETSE configurations from a template, runs a control
+simulation plus six single- and pairwise-perturbation cases (Na, K, GJ
+and their combinations), and computes the grounded local geometry used
+in the manuscript:
+
+  - Normalized excess-cost proxy components (E_mem, E_gj, E_pump).
+  - Local quadratic cost matrix Q_chi.
+  - Local write map R_chi (endpoint shifts in mean Vmem and wound-edge
+    GJ contrast).
+  - Induced memory co-metric K_mem = R Q^{-1} R^T.
+
+Must be run from the ``scripts/`` directory because output paths are
+relative to the current working directory.
+"""
 from __future__ import annotations
 
 import gzip
@@ -22,21 +38,30 @@ MINIMAL = DEMO / 'minimal_control.yml'
 
 
 def run(cmd: list[str], cwd: Path) -> None:
+    """Execute *cmd* as a subprocess in *cwd*, raising on failure."""
     print('RUN', ' '.join(cmd))
     subprocess.run(cmd, cwd=str(cwd), check=True)
 
 
 def load_sim(path: Path):
+    """Load a BETSE ``.betse.gz`` state file and return (sim, cells, p)."""
     with gzip.open(path, 'rb') as f:
         sim, cells, p = dill.load(f)
     return sim, cells, p
 
 
 def arr_list(lst) -> np.ndarray:
+    """Stack a list of per-timestep arrays into a (T, N) float array."""
     return np.stack([np.array(x, dtype=float) for x in lst], axis=0)
 
 
 def build_minimal_configs() -> None:
+    """Derive minimal control and perturbation YAML configs from the template.
+
+    Reads ``sim_config.yml``, strips it down to a short-window, small-grid,
+    no-extracellular, no-network configuration, and writes
+    ``minimal_control.yml`` plus one ``case_<name>.yml`` per perturbation.
+    """
     yaml = YAML()
     with BASE_SIM.open() as f:
         cfg = yaml.load(f)
@@ -115,6 +140,21 @@ def build_minimal_configs() -> None:
 
 
 def analyze() -> Tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
+    """Load all simulation outputs and compute the grounded local geometry.
+
+    For each perturbation case, computes control-normalized excess-cost
+    proxy components (membrane current, GJ flux, Na/K-ATPase pump) and
+    two endpoint shift coordinates (mean Vmem in mV, wound-edge GJ
+    contrast).  From the ``na``, ``gj``, and ``na_gj`` cases, assembles
+    the local quadratic cost matrix Q, write map R, and induced memory
+    co-metric K_mem = R Q^{-1} R^T.
+
+    Returns:
+        df: Per-case summary DataFrame.
+        Q: (2, 2) local quadratic cost matrix.
+        R: (2, 2) local write map.
+        K: (2, 2) induced memory co-metric.
+    """
     sim_dir = DEMO / 'SIMS' / 'minimal'
     files = {
         'control': 'sim_control.betse.gz',
@@ -191,6 +231,7 @@ def analyze() -> Tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
 
 
 def make_outputs(df: pd.DataFrame, Q: np.ndarray, R: np.ndarray, K: np.ndarray) -> None:
+    """Write summary CSV, endpoint-map and energy-decomposition plots, and a text report."""
     df.to_csv(ROOT / 'betse_summary.csv', index=False)
 
     plot_df = df[df.case != 'control'].copy()
@@ -237,6 +278,7 @@ def make_outputs(df: pd.DataFrame, Q: np.ndarray, R: np.ndarray, K: np.ndarray) 
 
 
 def main() -> None:
+    """Run the full pipeline: generate configs, run BETSE, analyze, write outputs."""
     if ROOT.exists():
         shutil.rmtree(ROOT)
     ROOT.mkdir(parents=True)

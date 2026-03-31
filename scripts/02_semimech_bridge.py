@@ -1,3 +1,20 @@
+"""Enriched semimechanistic bridge from BETSE features to phenotype prediction.
+
+Loads the BETSE simulation outputs produced by ``01_betse_local_grounding.py``,
+builds an enriched feature bank of endpoint and early-window summaries for each
+perturbation case, and fits a linear semimechanistic readout
+
+    mu_k = b + w^T h_k
+
+that maps simulator-derived features to the same latent phenotype layer used in
+the reduced count-based fit.  Feature selection is by exhaustive search over
+1–3-feature subsets ranked by leave-one-treated-out prediction error under a
+soft untreated-control anchor.
+
+Outputs include feature tables, model-search rankings, all-case predictions,
+cross-validation diagnostics, anchor-sensitivity sweeps, plots, a text report,
+and a LaTeX snippet for the manuscript.
+"""
 from __future__ import annotations
 
 import gzip
@@ -39,6 +56,8 @@ Phi_inv = ND.inv_cdf
 
 @dataclass
 class FitResult:
+    """Container for a fitted semimechanistic readout model."""
+
     features: Tuple[str, ...]
     beta: np.ndarray
     means: np.ndarray
@@ -51,6 +70,7 @@ class FitResult:
 
 
 def p_ch_sh(mu: float, theta: float) -> float:
+    """Challenge DH probability among immediate SH survivors given latent mean *mu*."""
     denom = Phi(-mu)
     if denom <= 0:
         return 1.0
@@ -58,6 +78,7 @@ def p_ch_sh(mu: float, theta: float) -> float:
 
 
 def solve_theta(mu_8oh: float, p_target: float = P_8OH_CHALLENGE) -> float:
+    """Solve for the challenge threshold theta_ch by bisection on p_ch_sh."""
     lo, hi = -5.0, 5.0
     for _ in range(200):
         mid = 0.5 * (lo + hi)
@@ -69,10 +90,12 @@ def solve_theta(mu_8oh: float, p_target: float = P_8OH_CHALLENGE) -> float:
 
 
 def arr_list(lst) -> np.ndarray:
+    """Stack a list of per-timestep arrays into a (T, N) float array."""
     return np.stack([np.array(x, dtype=float) for x in lst], axis=0)
 
 
 def load_sim(case: str):
+    """Load BETSE state file for *case* and return (sim, cells, p)."""
     path = SIM_DIR / f'sim_{case}.betse.gz'
     with gzip.open(path, 'rb') as f:
         sim, cells, p = dill.load(f)
@@ -80,7 +103,7 @@ def load_sim(case: str):
 
 
 def compute_grounded_QR(summary_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    # Reproduce the local grounded 2D endpoint map used earlier.
+    """Compute Q, R, K_mem and the dominant write eigenvector from the case summary."""
     E_na = float(summary_df.loc['na', 'E_total'])
     E_gj = float(summary_df.loc['gj', 'E_total'])
     E_na_gj = float(summary_df.loc['na_gj', 'E_total'])
@@ -101,7 +124,17 @@ def compute_grounded_QR(summary_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarra
 
 
 def build_feature_bank() -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    # Need control first for relative scales and masks.
+    """Load all simulations, compute enriched features and grounded geometry.
+
+    Returns:
+        features: Per-case enriched feature DataFrame (endpoint, integrated,
+            energetic, and control-relative delta columns).
+        summary: Per-case excess-cost and endpoint-shift summary DataFrame.
+        Q: (2, 2) local quadratic cost matrix.
+        R: (2, 2) local write map.
+        K: (2, 2) induced memory co-metric.
+        vdom: Dominant eigenvector of K.
+    """
     sim0, cells0, _ = load_sim('control')
     mem_to_cells = np.array(cells0.mem_to_cells)
 
@@ -218,6 +251,7 @@ def build_feature_bank() -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.nda
 
 
 def standardize_rows(X: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Z-score the feature columns of design matrix *X* (column 0 is the intercept)."""
     means = X[:, 1:].mean(axis=0)
     stds = X[:, 1:].std(axis=0)
     stds[stds == 0] = 1.0
@@ -227,6 +261,7 @@ def standardize_rows(X: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
 def fit_linear_readout(features_df: pd.DataFrame, feature_names: Sequence[str], p_control_anchor: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """Fit mu_k = b + w^T h_k via ridge regression on the four mapped families."""
     labels = ['control', '8OH', 'nigericin', 'monensin']
     y = np.array([
         Phi_inv(p_control_anchor),
@@ -249,6 +284,7 @@ def fit_linear_readout(features_df: pd.DataFrame, feature_names: Sequence[str], 
 
 
 def predict_mu(features_df: pd.DataFrame, feature_names: Sequence[str], beta: np.ndarray, means: np.ndarray, stds: np.ndarray) -> pd.Series:
+    """Predict latent mean mu for every case using a fitted readout model."""
     rows = []
     for case in features_df.index:
         rows.append([1.0] + [float(features_df.loc[case, c]) for c in feature_names])
@@ -259,6 +295,7 @@ def predict_mu(features_df: pd.DataFrame, feature_names: Sequence[str], beta: np
 
 
 def evaluate_cv(features_df: pd.DataFrame, feature_names: Sequence[str], p_control_anchor: float) -> Tuple[float, float, pd.DataFrame]:
+    """Leave-one-treated-out cross-validation over nigericin and monensin."""
     true_mu = {
         'control': Phi_inv(p_control_anchor),
         '8OH': Phi_inv(IMMEDIATE_TARGETS['8OH']),
@@ -297,6 +334,7 @@ def evaluate_cv(features_df: pd.DataFrame, feature_names: Sequence[str], p_contr
 
 
 def search_models(features_df: pd.DataFrame, p_control_anchor: float) -> pd.DataFrame:
+    """Exhaustive search over 1–3-feature subsets, ranked by CV error."""
     candidate_cols = [
         'x_dom_end',
         'vm_mean_int',
@@ -327,11 +365,13 @@ def search_models(features_df: pd.DataFrame, p_control_anchor: float) -> pd.Data
 
 
 def choose_model(search_df: pd.DataFrame) -> Tuple[str, ...]:
+    """Return the feature names of the top-ranked model from the search."""
     best_row = search_df.iloc[0]
     return tuple(best_row['features'].split(' | '))
 
 
 def make_fit(features_df: pd.DataFrame, chosen_features: Sequence[str], p_control_anchor: float) -> Tuple[FitResult, pd.DataFrame, pd.DataFrame]:
+    """Fit the chosen feature subset, predict all cases, and run CV."""
     beta, means, stds, rmse = fit_linear_readout(features_df, chosen_features, p_control_anchor)
     mu = predict_mu(features_df, chosen_features, beta, means, stds)
     theta = solve_theta(float(mu.loc[LABEL_TO_CASE['8OH']]))
@@ -355,6 +395,7 @@ def make_fit(features_df: pd.DataFrame, chosen_features: Sequence[str], p_contro
 
 
 def build_anchor_sensitivity(features_df: pd.DataFrame, chosen_features: Sequence[str]) -> pd.DataFrame:
+    """Sweep the soft control anchor over P_CONTROL_GRID and record predictions."""
     rows = []
     for pctrl in P_CONTROL_GRID:
         fit, pred_df, _ = make_fit(features_df, chosen_features, pctrl)
@@ -373,7 +414,7 @@ def build_anchor_sensitivity(features_df: pd.DataFrame, chosen_features: Sequenc
 
 
 def make_plots(pred_df: pd.DataFrame, chosen_features: Sequence[str], fit: FitResult) -> None:
-    # Feature plane in standardized coordinates.
+    """Save feature-plane scatter and immediate/challenge probability bar charts."""
     feat1, feat2 = chosen_features[0], chosen_features[1] if len(chosen_features) > 1 else (chosen_features[0], None)
     plt.figure(figsize=(7, 5))
     X = pred_df.loc[:, list(chosen_features)].copy()
@@ -414,6 +455,7 @@ def make_plots(pred_df: pd.DataFrame, chosen_features: Sequence[str], fit: FitRe
 
 def write_report(features_df: pd.DataFrame, summary_df: pd.DataFrame, Q: np.ndarray, R: np.ndarray, K: np.ndarray, vdom: np.ndarray,
                  search_df: pd.DataFrame, fit: FitResult, pred_df: pd.DataFrame, anchor_df: pd.DataFrame, cv_df: pd.DataFrame) -> None:
+    """Write a human-readable text report summarising the full fit."""
     report_lines = [
         'BETSE semimechanistic enriched readout fit',
         '',
@@ -454,6 +496,7 @@ def write_report(features_df: pd.DataFrame, summary_df: pd.DataFrame, Q: np.ndar
 
 
 def write_latex_snippet(fit: FitResult, pred_df: pd.DataFrame) -> None:
+    """Write a LaTeX paragraph with the fitted parameters for the manuscript."""
     snippet = rf"""
 A semimechanistic extension of the reduced readout can be obtained by replacing the free
 condition-level write effect by a fitted linear map from a BETSE-derived feature vector,
@@ -497,6 +540,7 @@ as a semimechanistic proof of concept rather than a definitive phenotype model.
 
 
 def main() -> None:
+    """Run the full semimechanistic bridge pipeline."""
     features_df, summary_df, Q, R, K, vdom = build_feature_bank()
     features_df.to_csv(ROOT / 'betse_semimech_enriched_features.csv')
     summary_df.to_csv(ROOT / 'betse_semimech_enriched_summary.csv')

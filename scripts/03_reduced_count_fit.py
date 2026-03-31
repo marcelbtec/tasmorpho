@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""Reduced rank-one latent-threshold fit to published planarian phenotype counts.
+
+Fits a probit-threshold model with latent variance sigma=1 and immediate
+threshold theta_imm=0 fixed.  The four free parameters are the latent means
+for 8-OH, nigericin, and monensin, plus a shared challenge threshold theta_ch.
+The 8-OH immediate and challenge counts are primary fit targets; nigericin
+and monensin immediate counts set their latent positions; and the nigericin
+and monensin challenge penetrances are held-out predictions.
+
+Produces closed-form estimates, an optional Nelder-Mead cross-check (when
+SciPy is available), the observed Hessian, Wald standard errors,
+delta-method probability intervals, plots, a text report, and a LaTeX
+snippet.
+
+No BETSE dependency — this script is fully standalone.
+"""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +42,8 @@ ND = NormalDist()
 
 @dataclass(frozen=True)
 class CountDatum:
+    """A single reconstructed phenotype count from the source papers."""
+
     label: str
     successes: int
     trials: int
@@ -74,24 +92,29 @@ CONSISTENCY_CHECK = {
 
 
 def phi_cdf(x: float) -> float:
+    """Standard normal CDF."""
     return ND.cdf(float(x))
 
 
 def phi_inv(p: float) -> float:
+    """Standard normal quantile function, clamped away from 0 and 1."""
     eps = 1e-12
     p = min(max(float(p), eps), 1.0 - eps)
     return ND.inv_cdf(p)
 
 
 def clip_prob(p: float) -> float:
+    """Clamp a probability to (eps, 1-eps) for numerical safety."""
     return min(max(float(p), 1e-12), 1.0 - 1e-12)
 
 
 def p_immediate(mu: float) -> float:
+    """Immediate DH probability: Phi(mu) with sigma=1 and theta_imm=0."""
     return phi_cdf(mu)
 
 
 def p_challenge_given_sh(mu: float, theta_ch: float) -> float:
+    """Challenge DH probability among immediate SH survivors."""
     denom = phi_cdf(-mu)
     if denom <= 0.0:
         return 1.0
@@ -100,6 +123,7 @@ def p_challenge_given_sh(mu: float, theta_ch: float) -> float:
 
 
 def negative_log_likelihood(params: np.ndarray) -> float:
+    """Binomial negative log-likelihood for the four-parameter reduced model."""
     mu_8oh, mu_nig, mu_mon, theta_ch = map(float, params)
 
     probs = {
@@ -118,6 +142,7 @@ def negative_log_likelihood(params: np.ndarray) -> float:
 
 
 def closed_form_estimate() -> np.ndarray:
+    """Compute the closed-form MLE for (mu_8oh, mu_nig, mu_mon, theta_ch)."""
     count_map = {d.label: d for d in COUNTS}
 
     mu_8oh = phi_inv(count_map["8OH_immediate_DH"].successes / count_map["8OH_immediate_DH"].trials)
@@ -133,6 +158,7 @@ def closed_form_estimate() -> np.ndarray:
 
 
 def maybe_nelder_mead(start: np.ndarray) -> Dict[str, object]:
+    """Run Nelder-Mead from a perturbed start if SciPy is available."""
     if minimize is None:
         return {
             "available": False,
@@ -164,6 +190,7 @@ def finite_difference_hessian(
     x: np.ndarray,
     step_scale: float = 1e-5,
 ) -> np.ndarray:
+    """Symmetric finite-difference Hessian of *func* at *x*."""
     x = np.asarray(x, dtype=float)
     n = x.size
     steps = np.maximum(step_scale, step_scale * np.maximum(1.0, np.abs(x)))
@@ -195,6 +222,7 @@ def finite_difference_gradient(
     x: np.ndarray,
     step_scale: float = 1e-6,
 ) -> np.ndarray:
+    """Central finite-difference gradient of *func* at *x*."""
     x = np.asarray(x, dtype=float)
     n = x.size
     steps = np.maximum(step_scale, step_scale * np.maximum(1.0, np.abs(x)))
@@ -212,6 +240,7 @@ def delta_method_interval(
     cov: np.ndarray,
     z_score: float = 1.96,
 ) -> Tuple[float, float, float]:
+    """Approximate CI for a scalar function of the parameters via the delta method."""
     estimate = float(scalar_func(xhat))
     grad = finite_difference_gradient(scalar_func, xhat)
     variance = float(grad @ cov @ grad)
@@ -223,6 +252,7 @@ def delta_method_interval(
 
 
 def build_count_table() -> pd.DataFrame:
+    """Assemble the reconstructed count table including the consistency check."""
     rows = []
     for datum in COUNTS:
         rows.append(
@@ -249,6 +279,7 @@ def build_count_table() -> pd.DataFrame:
 
 
 def build_parameter_table(xhat: np.ndarray, cov: np.ndarray) -> pd.DataFrame:
+    """Build a DataFrame of parameter estimates with Wald standard errors and 95% CIs."""
     names = ["mu_8OH", "mu_nigericin", "mu_monensin", "theta_ch"]
     labels = {
         "mu_8OH": "latent write mean for 8-OH",
@@ -273,6 +304,7 @@ def build_parameter_table(xhat: np.ndarray, cov: np.ndarray) -> pd.DataFrame:
 
 
 def build_probability_table(xhat: np.ndarray, cov: np.ndarray) -> pd.DataFrame:
+    """Build a DataFrame of fitted and predicted probabilities with delta-method CIs."""
     funcs: Dict[str, Callable[[np.ndarray], float]] = {
         "p_8OH_immediate": lambda x: p_immediate(float(x[0])),
         "p_8OH_challenge_given_SH": lambda x: p_challenge_given_sh(float(x[0]), float(x[3])),
@@ -323,6 +355,7 @@ def build_probability_table(xhat: np.ndarray, cov: np.ndarray) -> pd.DataFrame:
 
 
 def make_probability_plot(prob_df: pd.DataFrame, output_path: Path) -> None:
+    """Bar chart of fitted and held-out probabilities with error bars."""
     order = [
         "p_8OH_immediate",
         "p_8OH_challenge_given_SH",
@@ -363,6 +396,7 @@ def make_probability_plot(prob_df: pd.DataFrame, output_path: Path) -> None:
 
 
 def make_latent_axis_plot(xhat: np.ndarray, output_path: Path) -> None:
+    """Plot the latent axis with thresholds, cryptic band, and treatment positions."""
     mu_8oh, mu_nig, mu_mon, theta_ch = map(float, xhat)
     xs = np.linspace(-2.5, 0.5, 500)
     density = np.exp(-0.5 * xs**2) / math.sqrt(2.0 * math.pi)
@@ -396,6 +430,7 @@ def write_report(
     param_df: pd.DataFrame,
     prob_df: pd.DataFrame,
 ) -> None:
+    """Write a human-readable text report of the full fit."""
     report_lines = [
         "Reduced rank-one latent-threshold fit to published planarian counts",
         "",
@@ -436,6 +471,7 @@ def write_report(
 
 
 def write_latex_snippet(output_path: Path, xhat: np.ndarray, prob_df: pd.DataFrame) -> None:
+    """Write a LaTeX paragraph with the fitted parameters for the manuscript."""
     lookup = prob_df.set_index("quantity")
     snippet = rf"""
 Using the 8-OH challenge data, the reduced count-based fit gives
@@ -464,6 +500,7 @@ data enter the calibration.
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="Reproduce the manuscript's reduced count-based latent-threshold fit."
     )
@@ -477,6 +514,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Run the full reduced-fit pipeline: estimate, check, tabulate, plot, report."""
     args = parse_args()
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
