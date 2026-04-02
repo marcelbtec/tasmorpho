@@ -119,11 +119,6 @@ Fits a reduced rank-one latent-threshold model to published phenotype counts wit
 | $\hat p_{\mathrm{Nig}}^{\mathrm{ch\|SH}}$ | $0.148$ |
 | $\hat p_{\mathrm{Mon}}^{\mathrm{ch\|SH}}$ | $0.146$ |
 
-## References
-
-- Durant et al. (2017). *Biophysical Journal*, 112(10), 2231–2243.
-- Durant et al. (2019). *Bioinformatics*, 35(24), 5287–5294.
-- Pietak & Levin (2017). *J. R. Soc. Interface*, 14(134), 20170425.
 
 ## Citation
 
