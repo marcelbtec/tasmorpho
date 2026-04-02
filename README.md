@@ -4,7 +4,7 @@ Reproducibility code for:
 
 > **Hidden regenerative state in planarians: A geometric model of bioelectric memory using Tangential Action Spaces**
 >
-> Marcel Blattner — Applied AI Research Lab, Lucerne University of Applied Sciences and Arts
+> Marcel Blattner, Applied AI Research Lab, Lucerne University of Applied Sciences and Arts
 >
 > *bioRxiv* preprint (forthcoming)
 
